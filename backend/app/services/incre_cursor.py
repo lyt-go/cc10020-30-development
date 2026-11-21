@@ -2,7 +2,12 @@
 
 管理每个端点的增量拉取进度，记录上次成功位置、
 当前采集位置和增量类型，支持断点恢复和回溯。
-跨模块关联：batch_ingest（批量断点）、backfill_job（回补起始位置）。
+
+离线采集回收的日期与位置数据经 progress_receipt 校验后形成可核对的
+覆盖记录；本服务读取这些记录，给出“已确认到哪一天、还缺哪些天”，
+作为下一次增量采集和断点恢复的依据。
+跨模块关联：batch_ingest（批量断点）、backfill_job（回补起始位置）、
+progress_receipt（离线进度凭证与可核对覆盖）。
 """
 from __future__ import annotations
 
@@ -142,6 +147,37 @@ class IncreCursorService(BaseModuleService):
         """获取所有端点的当前水位（供监控模块批量查询）。"""
         return dict(self._positions)
 
+    def get_coverage_progress(self, endpoint_id: int | str) -> dict[str, Any]:
+        """读取可核对的采集进度，给出已确认日期与缺口。
+
+        水位（位置）和日期覆盖是两件事：位置已经推进到 12 日，
+        不代表 9 日已经有效写入。这里以日期覆盖为准。
+        """
+        from app.services.progress_receipt import ProgressReceiptService
+
+        receipt_svc = ProgressReceiptService()
+        coverage = receipt_svc.get_coverage(endpoint_id)
+        confirmed = sorted({str(row.get("日期")) for row in coverage if row.get("已确认")})
+        unconfirmed = sorted({
+            str(row.get("日期")) for row in coverage if not row.get("已确认")
+        } - set(confirmed))
+        position = self.get_position(endpoint_id)
+        return {
+            "endpoint_id": str(endpoint_id),
+            "position": position.get("position", 0),
+            "confirmed_dates": confirmed,
+            "unconfirmed_dates": unconfirmed,
+            "confirmed_until": confirmed[-1] if confirmed else "",
+            "earliest_gap": unconfirmed[0] if unconfirmed else "",
+            "sources": receipt_svc.coverage_sources(endpoint_id),
+        }
+
+    def next_watermark(self, endpoint_id: int | str, start_date: str, end_date: str) -> dict[str, Any]:
+        """下一次增量采集应从哪一天续做（含未确认日期）。"""
+        from app.services.progress_receipt import ProgressReceiptService
+
+        return ProgressReceiptService().next_collection_window(endpoint_id, start_date, end_date)
+
     def domain_snapshot(self) -> dict[str, Any]:
         """输出增量水位管理的数据质量快照。"""
         rows = json_store.get_all(self.MODULE)
@@ -162,3 +198,9 @@ class IncreCursorService(BaseModuleService):
             "total_positions": len(self._positions),
             "operation": self.OPERATION_TERM,
         }
+
+    def get_coverage_dates(self, endpoint_id: int | str) -> list[str]:
+        """已确认写入的日期清单，供监控与回补共用。"""
+        from app.services.progress_receipt import ProgressReceiptService
+
+        return ProgressReceiptService().confirmed_dates(endpoint_id)

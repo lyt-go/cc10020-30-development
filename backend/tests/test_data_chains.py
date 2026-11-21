@@ -21,7 +21,20 @@ import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from app.persistence import JsonStore, json_store as global_store
+from app import persistence
+from app.persistence import JsonStore
+
+_ORIGINAL_STORE = persistence.json_store
+
+
+class _StoreProxy:
+    """测试里统一用 json_store 读写；夹具换掉全局存储后自动跟随。"""
+
+    def __getattr__(self, name):
+        return getattr(persistence.json_store, name)
+
+
+json_store = _StoreProxy()
 from app.services.api_endpoint import ApiEndpointService
 from app.services.webhook_channel import WebhookChannelService
 from app.services.event_schema import EventSchemaService
@@ -78,8 +91,13 @@ def _seed_and_cleanup():
 
         yield
 
+        # 还原全局存储后重新加载领域服务，避免它们继续持有已删除的临时分区。
         import app.persistence
-        app.persistence.json_store = global_store
+        app.persistence.json_store = _ORIGINAL_STORE
+        for mod in [api_mod, wh_mod, es_mod, mq_mod, dlq_mod, sink_mod, dt_mod,
+                    dq_mod, dr_mod, df_mod, bi_mod, ic_mod, bj_mod, ctl_mod,
+                    rlc_mod, aas_mod, ea_mod, im_mod]:
+            importlib.reload(mod)
 
 
 # ──────────────────────────────────────────────────────────
@@ -147,13 +165,21 @@ def test_chain_1_webhook_to_lake():
     for dr in drs:
         dispatch_svc.run_action(int(dr["id"]), "标记生效")
 
-    # 发送Webhook事件
-    result = webhook_svc.receive_webhook(channel_id, {
+    # 发送Webhook事件：通道要求 HMAC-SHA256，按签名密钥签出签名头
+    import hashlib
+    import hmac
+
+    event_payload = {
         "type": "order_created",
         "order_id": "ORD-2024-001",
         "amount": 299.99,
         "customer": "test_user",
-    }, signature=None, headers={"X-Webhook-Id": "wh-001"})
+    }
+    body = json.dumps(event_payload, sort_keys=True, ensure_ascii=False)
+    signature = hmac.new(b"secret123", body.encode(), hashlib.sha256).hexdigest()
+    result = webhook_svc.receive_webhook(channel_id, event_payload,
+                                        signature=signature,
+                                        headers={"X-Webhook-Id": "wh-001"})
 
     assert result["ok"], f"Webhook接收失败: {result.get('message')}"
     assert result["event_id"] is not None
@@ -253,8 +279,13 @@ def test_chain_3_dlq_to_replay():
     # 消费一批消息（会触发部分死信）
     result = mq_svc.consume_batch(mq_id, max_messages=10)
 
-    # 检查死信统计
+    # 检查死信统计：模拟消费按概率失败，多跑几轮保证至少命中一条死信
     dlq_stats = dlq_svc.get_dlq_stats()
+    for _ in range(10):
+        if dlq_stats["total_dlq"] > 0:
+            break
+        mq_svc.consume_batch(mq_id, max_messages=10)
+        dlq_stats = dlq_svc.get_dlq_stats()
     assert dlq_stats["total_dlq"] > 0, "应该有消息进入死信队列"
 
     # 分析失败原因

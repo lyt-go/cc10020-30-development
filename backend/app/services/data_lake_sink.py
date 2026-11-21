@@ -29,7 +29,7 @@ class DataLakeSinkService(BaseModuleService):
 
     def __init__(self) -> None:
         super().__init__()
-        self._lake_base = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "data_store", "lake")
+        self._lake_base = os.path.join(str(json_store.base_dir), "lake")
         os.makedirs(self._lake_base, exist_ok=True)
         self._write_stats: dict[str, int] = {}
 

@@ -10,7 +10,9 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import settings
 from app.routers import ROUTERS
-from app.store import store
+from app.store import seed_store, store
+
+seed_store()
 
 app = FastAPI(title="API集成与事件编排平台", version="1.0.0")
 
@@ -38,3 +40,6 @@ def overview() -> dict[str, object]:
 # 否则固定路径会被动态路径抢先匹配。
 for module in ROUTERS:
     app.include_router(module.router)
+    # 附属路由（如回补任务的待回补清单）与主路由共用同一个模块前缀。
+    if getattr(module, "backfill_router", None) is not None:
+        app.include_router(module.backfill_router)

@@ -544,6 +544,7 @@ SEED_ROWS: dict[str, list[dict[str, Any]]] = {
   '增量类型': '增量水位管理样例3',
   '覆写策略': '增量水位管理样例3',
   '更新间隔': '增量水位管理样例3'}],
+    "progress_receipt": [],
     "backfill_job": [{'id': 1,
   'status': '草稿',
   'pending': True,

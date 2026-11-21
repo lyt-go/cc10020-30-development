@@ -28,7 +28,7 @@ class EventArchiveService(BaseModuleService):
 
     def __init__(self) -> None:
         super().__init__()
-        self._archive_base = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "data_store", "archive")
+        self._archive_base = os.path.join(str(json_store.base_dir), "archive")
         os.makedirs(self._archive_base, exist_ok=True)
         self._archive_history: list[dict[str, Any]] = []
 
@@ -54,7 +54,7 @@ class EventArchiveService(BaseModuleService):
         retention_days = int(policy.get("保留天数", "90") or "90")
 
         # 扫描数据湖
-        lake_base = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "data_store", "lake")
+        lake_base = os.path.join(str(json_store.base_dir), "lake")
         events_dir = os.path.join(lake_base, "events")
 
         total_archived = 0

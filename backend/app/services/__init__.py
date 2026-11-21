@@ -20,6 +20,7 @@ from app.services.incre_cursor import IncreCursorService
 from app.services.backfill_job import BackfillJobService
 from app.services.event_archive import EventArchiveService
 from app.services.integration_monitor import IntegrationMonitorService
+from app.services.progress_receipt import ProgressReceiptService
 
 SERVICES: dict[str, BaseModuleService] = {
     "api_endpoint": ApiEndpointService(),
@@ -40,6 +41,7 @@ SERVICES: dict[str, BaseModuleService] = {
     "backfill_job": BackfillJobService(),
     "event_archive": EventArchiveService(),
     "integration_monitor": IntegrationMonitorService(),
+    "progress_receipt": ProgressReceiptService(),
 }
 
 

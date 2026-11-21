@@ -15,6 +15,55 @@
       </div>
     </header>
 
+    <p v-if="meta.key === 'progress_receipt'" class="status-legend" data-testid="progress-hint">
+      离线采集进度文件导入后会登记原文件；同一端点重复上传同一文件只确认一次凭证。
+    </p>
+
+    <form
+      v-if="meta.key === 'progress_receipt'"
+      class="filter-bar"
+      data-testid="progress-import"
+      @submit.prevent="submitImport"
+    >
+      <label class="filter-item">
+        <span>关联端点</span>
+        <input v-model="importForm.endpoint" data-testid="import-endpoint" placeholder="例如 7" required />
+      </label>
+      <label class="filter-item">
+        <span>取得日期</span>
+        <input v-model="importForm.acquiredDate" data-testid="import-acquired" placeholder="YYYY-MM-DD" />
+      </label>
+      <label class="filter-item">
+        <span>进度文件</span>
+        <input
+          data-testid="import-file"
+          type="file"
+          accept=".csv,.json,.jsonl,.ndjson,text/csv,application/json"
+          @change="onFileChange"
+        />
+      </label>
+      <button class="btn primary" data-testid="import-submit" type="submit" :disabled="importing">
+        {{ importing ? '导入中…' : '导入进度凭证' }}
+      </button>
+    </form>
+
+    <p v-if="importMessage" class="status-legend" data-testid="import-result">{{ importMessage }}</p>
+
+    <table v-if="meta.key === 'progress_receipt' && coverageDays.length" class="data-table" data-testid="coverage-table">
+      <thead>
+        <tr><th>日期</th><th>确认状态</th><th>来源依据</th><th>写入结果</th><th>取得日期</th></tr>
+      </thead>
+      <tbody>
+        <tr v-for="day in coverageDays" :key="day.date" :data-testid="`coverage-${day.date}`">
+          <td>{{ day.date }}</td>
+          <td>{{ day.confirmed ? '已确认' : '未确认' }}</td>
+          <td>{{ day.sources.map((item) => `${item.type}:${item.receipt_no}`).join(' / ') }}</td>
+          <td>{{ day.sources.map((item) => item.write_result).join(' / ') }}</td>
+          <td>{{ day.sources.map((item) => item.acquired_date).filter(Boolean).join(' / ') || '—' }}</td>
+        </tr>
+      </tbody>
+    </table>
+
     <div class="stat-row">
       <article v-for="item in stats" :key="item.label" class="stat-card">
         <span class="stat-label">{{ item.label }}</span>
@@ -103,6 +152,8 @@ import {
   moduleMeta,
   runAction as applyAction,
 } from '@/api/backend-service'
+import { loadCoverage, uploadProgressReceipt } from '@/api/progress'
+import type { CoverageDay } from '@/api/progress'
 import type { EntryRow } from '@/data/types'
 
 const props = defineProps<{ moduleKey: string }>()
@@ -115,6 +166,10 @@ const filterFields = meta.fields.slice(0, 3)
 const showCreate = ref(false)
 const creating = ref(false)
 const createValues = ref<Record<string, string>>({})
+const importForm = ref({ endpoint: '', acquiredDate: '', file: null as File | null })
+const importing = ref(false)
+const importMessage = ref('')
+const coverageDays = ref<CoverageDay[]>([])
 const stats = computed(() => [
   { label: meta.metrics[0], value: total.value },
   { label: meta.metrics[1], value: rows.value.filter((row) => row.status === meta.statuses[1]).length },
@@ -129,6 +184,49 @@ const statusSummary = computed(() =>
     count: rows.value.filter((row) => String(row.status) === status).length,
   })),
 )
+
+function onFileChange(event: Event) {
+  const input = event.target as HTMLInputElement
+  importForm.value.file = input.files?.[0] ?? null
+}
+
+async function submitImport() {
+  errorMessage.value = ''
+  importMessage.value = ''
+  const { endpoint, acquiredDate, file } = importForm.value
+  if (!file) {
+    importMessage.value = '请选择需要导入的进度文件'
+    return
+  }
+  importing.value = true
+  try {
+    const result = await uploadProgressReceipt(endpoint, file, acquiredDate)
+    importMessage.value = result.message
+    if (!result.ok && !result.confirmed) {
+      throw new Error(result.message)
+    }
+    await reload()
+    await refreshCoverage()
+  } catch (error) {
+    importMessage.value = error instanceof Error ? error.message : '进度凭证导入失败'
+  } finally {
+    importing.value = false
+  }
+}
+
+async function refreshCoverage() {
+  if (meta.key !== 'progress_receipt' || !importForm.value.endpoint) {
+    coverageDays.value = []
+    return
+  }
+  try {
+    const payload = await loadCoverage(importForm.value.endpoint)
+    coverageDays.value = payload.sources ?? []
+  } catch (error) {
+    coverageDays.value = []
+    errorMessage.value = error instanceof Error ? error.message : '采集进度覆盖读取失败'
+  }
+}
 
 function resetFilters() {
   filters.value = {}

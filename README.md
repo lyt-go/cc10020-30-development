@@ -65,6 +65,7 @@ npm run dev
 | 接入质量校验 | `data_quality_rule` | 质量规则 | 规则编号、数据来源、校验字段 |
 | 调用链路追踪 | `call_trace_log` | 调用记录 | 记录编号、关联端点、请求参数 |
 | 增量水位管理 | `incre_cursor` | 水位标记 | 标记编号、关联端点、增量字段 |
+| 采集进度凭证 | `progress_receipt` | 进度凭证 | 凭证编号、关联端点、取得日期 |
 | 历史回补任务 | `backfill_job` | 回补任务 | 任务编号、关联端点、起始日期 |
 | 事件归档清理 | `event_archive` | 归档策略 | 策略编号、事件类型、归档条件 |
 | 集成监控看板 | `integration_monitor` | 监控指标 | 指标编号、监控对象、成功率 |
@@ -76,6 +77,37 @@ npm run dev
   `frontend/src/domain/<模块>.ts`，用于承载真实业务差异并维持36题位容量。
 - 列表接口统一返回 `{ items, total, page, size }`，动作接口统一返回 `{ ok, message }`。
 - 状态流转只允许在 `app/services` 里改，路由层不做业务判断。
+
+## 采集进度凭证与历史回补
+
+离线采集（爬虫 / RPA / 导出脚本）把“日期 + 位置 + 写入结果”写成文件回收，
+通过进度凭证接口导入后形成可核对的采集进度，历史回补据此只拉缺口。
+
+```bash
+# 导入离线进度文件（CSV / JSON / JSONL）。同一端点重复上传同一文件只确认一次。
+curl -F endpoint_id=7 -F acquired_date=2026-11-09 \
+     -F file=@offline-1108.csv http://127.0.0.1:8000/api/progress_receipt/import
+
+# 校验失败后从未确认的凭证续做
+curl -X POST http://127.0.0.1:8000/api/progress_receipt/1/confirm
+
+# 可核对的覆盖：每天列出全部来源回执（离线凭证 + 线上回执）
+curl 'http://127.0.0.1:8000/api/progress_receipt/coverage?endpoint_id=7&start_date=2026-11-08&end_date=2026-11-12'
+
+# 缺口与下一次采集的续做位置
+curl 'http://127.0.0.1:8000/api/progress_receipt/next-window?endpoint_id=7&start_date=2026-11-08&end_date=2026-11-13'
+
+# 待回补清单（回补任务执行后）
+curl http://127.0.0.1:8000/api/backfill_job/1/pending
+```
+
+要点：
+
+- 导入时原文件按 SHA-256 摘要落盘登记，记录里保留文件名、摘要和原始行；
+- 每个“(端点, 日期)”在数据湖只保留一份来源记录，复查已有回执不会重复落湖；
+- 覆盖记录按“(来源类型, 回执, 端点, 日期)”唯一，同一端点同一天可以同时有
+  离线凭证和线上回执两份依据，确认状态取并集；
+- 回补只向端点请求没有已写入依据的日期，缺口逐日写入待回补清单。
 
 领域：数据工程
 子方向：数据采集、爬虫与RPA
